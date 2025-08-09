@@ -20,9 +20,15 @@ export function useDragAndDrop() {
 
   const onDrop: React.DragEventHandler = useCallback(
     (event) => {
-      const nodeProps = JSON.parse(
-        event.dataTransfer.getData('application/reactflow'),
-      );
+      const raw = event.dataTransfer.getData('application/reactflow');
+      if (!raw) return;
+
+      let nodeProps: any;
+      try {
+        nodeProps = JSON.parse(raw);
+      } catch {
+        return;
+      }
 
       if (!nodeProps) return;
 

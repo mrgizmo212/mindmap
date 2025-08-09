@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Handle, Position } from '@xyflow/react';
+import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import { BaseNode } from '@/components/base-node';
 import { WorkflowNodeProps } from './index';
 import { useAppStore } from '@/app/workflow/store';
@@ -10,7 +10,7 @@ import {
   Undo2, Redo2, HelpCircle, Type, ListOrdered, Image as ImageIcon, Table, 
   MessageSquare, Minus, Search, ChevronRight, Zap, Settings,
   Heading, AlignLeft, CheckSquare, ExternalLink, Terminal,
-  Quote, FileCode, Smile, AlertCircle, User, GitPullRequest
+  Quote, FileCode, Smile, AlertCircle, User, GitPullRequest, Calendar, Clock
 } from 'lucide-react';
 
 export function MarkdownNode({ id, data }: WorkflowNodeProps) {
@@ -22,8 +22,11 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   const [activeTab, setActiveTab] = useState('text');
   const [searchQuery, setSearchQuery] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const setNodes = useAppStore((state) => state.setNodes);
   const getNodes = useAppStore((state) => state.getNodes);
+  const { getNode, fitView } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   
   // Undo/Redo history
   const [history, setHistory] = useState<string[]>([data?.content || '']);
@@ -414,18 +417,28 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
     }
   }, [applyFormat, undo, redo]);
 
-  // Auto-focus when expanding
+  // Auto-focus and center viewport on this node when expanding
   useEffect(() => {
-    if (isExpanded && textareaRef.current) {
-      textareaRef.current.focus();
-    }
-  }, [isExpanded]);
+    if (!isExpanded) return;
+
+    // focus editor
+    textareaRef.current?.focus();
+
+    // wait for size to update, then center viewport on this node
+    requestAnimationFrame(() => {
+      updateNodeInternals(id);
+      const node = getNode(id);
+      if (node) {
+        fitView({ nodes: [node], padding: 0.2, duration: 300 });
+      }
+    });
+  }, [isExpanded, id, getNode, fitView, updateNodeInternals]);
 
   // No width observers needed; container + w-full keeps elements aligned
 
   return (
-    <BaseNode className={`transition-all duration-300 ${isExpanded ? 'min-w-[600px]' : 'min-w-[300px]'}`}>
-      <div className="p-3">
+    <BaseNode className={`transition-all duration-300 ${isExpanded ? 'min-w-[640px]' : 'w-[320px]'}`}>
+      <div ref={containerRef} className="p-3">
         <div className="flex items-center gap-2 mb-2">
           <FileText className="w-4 h-4 text-blue-500" />
           <input
@@ -653,6 +666,18 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                   >
                     <Settings className="w-3 h-3" />
                     <span>Extended</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('vars')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'vars' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Calendar className="w-3 h-3" />
+                    <span>Variables</span>
                   </button>
                 </div>
                 
@@ -1151,6 +1176,46 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                         </div>
                       </>
                     )}
+
+                    {/* Variables Tab */}
+                    {activeTab === 'vars' && (
+                      <>
+                        {[
+                          { label: 'Current Date', value: 'Current Date: {{current_date}}', Icon: Calendar },
+                          { label: 'Current User', value: 'Current User: {{current_user}}', Icon: User },
+                          { label: 'UTC ISO Datetime', value: 'UTC ISO Datetime: {{iso_datetime}}', Icon: Clock },
+                          { label: 'Current Date & Time', value: 'Current Date & Time: {{current_datetime}}', Icon: Clock },
+                        ].filter(item => matchesSearch(item.value, item.label)).map(({ label, value, Icon }) => (
+                          <button
+                            key={label}
+                            onClick={() => {
+                              const textarea = textareaRef.current;
+                              if (!textarea) return;
+                              const start = textarea.selectionStart;
+                              const end = textarea.selectionEnd;
+                              const beforeText = content.substring(0, start);
+                              const afterText = content.substring(end);
+                              const updatedContent = beforeText + value + afterText;
+                              setContent(updatedContent);
+                              updateNodeData({ content: updatedContent });
+                              setTimeout(() => {
+                                textarea.focus();
+                                const pos = start + value.length;
+                                textarea.setSelectionRange(pos, pos);
+                              }, 0);
+                            }}
+                            className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer col-span-2"
+                            type="button"
+                          >
+                            <Icon className="w-3 h-3" />
+                            <code className="bg-gray-200 dark:bg-gray-800 px-1 whitespace-pre">{value}</code>
+                          </button>
+                        ))}
+                        <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs text-gray-500">
+                          These variables will be rendered by the workflow runtime where supported.
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1167,7 +1232,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                 spellCheck={true}
                 autoCorrect="on"
                 autoCapitalize="sentences"
-                className="nodrag nowheel w-full min-w-full aspect-square p-4 text-sm font-mono bg-white dark:bg-gray-900 border-2 border-blue-500 rounded-md overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize"
+                className="nodrag nowheel w-full min-w-full h-64 p-4 text-sm font-mono bg-white dark:bg-gray-900 border-2 border-blue-500 rounded-md overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize"
                 placeholder="Enter markdown, code, or plain text... (Esc to close)"
               />
               
@@ -1196,7 +1261,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
             onDoubleClick={handleDoubleClick}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
-            className={`nodrag relative min-h-[120px] p-3 text-sm font-mono rounded-md cursor-pointer whitespace-pre-wrap transition-all ${
+            className={`nodrag relative min-h-[120px] max-h-[120px] overflow-hidden p-3 text-sm font-mono rounded-md cursor-pointer whitespace-pre-wrap break-words transition-all ${
               isHovered 
                 ? 'bg-white dark:bg-gray-900 border-2 border-blue-400 shadow-sm' 
                 : 'bg-gray-50 dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700'
