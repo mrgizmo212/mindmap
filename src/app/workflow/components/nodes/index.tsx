@@ -25,6 +25,8 @@ export type WorkflowNodeData = {
   childOf?: string;
   /** If true, the node should render in expanded editor mode initially */
   forceExpanded?: boolean;
+  /** When true and used with childOf, render only the reference panel (search + tabs) */
+  childPanelOnly?: boolean;
 };
 
 export type WorkflowNodeProps = NodeProps<Node<WorkflowNodeData>> & {

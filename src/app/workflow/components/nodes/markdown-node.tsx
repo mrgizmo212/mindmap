@@ -538,7 +538,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                 id: string;
                 type: 'markdown-node';
                 position: { x: number; y: number };
-                data: typeof data & { childOf: string; forceExpanded: boolean };
+                data: typeof data & { childOf: string; forceExpanded: boolean; childPanelOnly: boolean };
               } = {
                 id: childId,
                 type: 'markdown-node',
@@ -552,6 +552,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                   content,
                   childOf: id,
                   forceExpanded: true,
+                  childPanelOnly: true,
                 },
               };
               addNode(childNode);
@@ -1250,40 +1251,39 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
         </div>
       )}
       
-      {/* Resizable container that keeps textarea and stats bar aligned */}
-      <div className="overflow-auto inline-block min-w-full">
-        <textarea
-          ref={textareaRef}
-          value={content}
-          onChange={handleContentChange}
-          onKeyDown={handleKeyDown}
-          onWheel={handleWheel}
-          spellCheck={true}
-          autoCorrect="on"
-          autoCapitalize="sentences"
-          className="nodrag nowheel w-full min-w-full h-64 p-4 text-sm font-mono bg-white dark:bg-gray-900 border-2 border-blue-500 rounded-md overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize"
-          placeholder="Enter markdown, code, or plain text... (Esc to close)"
-        />
-        
-        {/* Stats bar - now stays aligned with textarea width */}
-        <div className="mt-2 px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 w-full">
-          <div className="flex items-center gap-3">
-            <span>{getContentStats().words} words</span>
-            <span>{getContentStats().lines} lines</span>
-            <span>~{getContentStats().tokens} tokens</span>
-            {getContentStats().headings > 0 && (
-              <span>{getContentStats().headings} headings</span>
-            )}
-            {getContentStats().codeBlocks > 0 && (
-              <span>{getContentStats().codeBlocks} code blocks</span>
-            )}
-            {getContentStats().hasUnclosedCodeBlock && (
-              <span className="text-yellow-500 font-semibold">⚠ Unclosed code block</span>
-            )}
+      {!data?.childPanelOnly && (
+        <div className="overflow-auto inline-block min-w-full">
+          <textarea
+            ref={textareaRef}
+            value={content}
+            onChange={handleContentChange}
+            onKeyDown={handleKeyDown}
+            onWheel={handleWheel}
+            spellCheck={true}
+            autoCorrect="on"
+            autoCapitalize="sentences"
+            className="nodrag nowheel w-full min-w-full h-64 p-4 text-sm font-mono bg-white dark:bg-gray-900 border-2 border-blue-500 rounded-md overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize"
+            placeholder="Enter markdown, code, or plain text... (Esc to close)"
+          />
+          <div className="mt-2 px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 w-full">
+            <div className="flex items-center gap-3">
+              <span>{getContentStats().words} words</span>
+              <span>{getContentStats().lines} lines</span>
+              <span>~{getContentStats().tokens} tokens</span>
+              {getContentStats().headings > 0 && (
+                <span>{getContentStats().headings} headings</span>
+              )}
+              {getContentStats().codeBlocks > 0 && (
+                <span>{getContentStats().codeBlocks} code blocks</span>
+              )}
+              {getContentStats().hasUnclosedCodeBlock && (
+                <span className="text-yellow-500 font-semibold">⚠ Unclosed code block</span>
+              )}
+            </div>
+            <span className="text-xs italic">Drag corner to resize</span>
           </div>
-          <span className="text-xs italic">Drag corner to resize</span>
         </div>
-      </div>
+      )}
     </div>
   );
 
