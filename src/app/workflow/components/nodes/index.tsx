@@ -21,6 +21,10 @@ export type WorkflowNodeData = {
   tooltip?: string;
   content?: string;
   separatorType?: 'line' | 'space' | 'page-break';
+  /** When present, this node acts as a temporary child editor for the given parent node id */
+  childOf?: string;
+  /** If true, the node should render in expanded editor mode initially */
+  forceExpanded?: boolean;
 };
 
 export type WorkflowNodeProps = NodeProps<Node<WorkflowNodeData>> & {
