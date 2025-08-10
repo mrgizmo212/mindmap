@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-//
 import { Handle, Position, useReactFlow, useUpdateNodeInternals } from '@xyflow/react';
 import { BaseNode } from '@/components/base-node';
 import { WorkflowNodeProps } from './index';
@@ -17,17 +16,16 @@ import {
 export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   const [title, setTitle] = useState(data?.title || 'Untitled Section');
   const [content, setContent] = useState(data?.content || '');
-  const [isExpanded, setIsExpanded] = useState(() => Boolean(data?.forceExpanded || data?.childOf));
+  const [isExpanded, setIsExpanded] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [activeTab, setActiveTab] = useState('text');
   const [searchQuery, setSearchQuery] = useState('');
   const [isPoppedOut, setIsPoppedOut] = useState(false);
+  const [toolboxPos, setToolboxPos] = useState<{ top: number; left: number; width: number; above: boolean }>({ top: 0, left: 0, width: 600, above: false });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const setNodes = useAppStore((state) => state.setNodes);
-  const addNode = useAppStore((state) => state.addNode);
-  const removeNode = useAppStore((state) => state.removeNode);
   const getNodes = useAppStore((state) => state.getNodes);
   const { getNode, fitView } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -40,17 +38,9 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   const updateNodeData = useCallback((updates: Partial<typeof data>) => {
     const nodes = getNodes();
     setNodes(
-      nodes.map(node => {
-        if (node.id === id) {
-          return { ...node, data: { ...node.data, ...updates } };
-        }
-        if (data?.childOf && node.id === data.childOf) {
-          return { ...node, data: { ...node.data, ...updates } };
-        }
-        return node;
-      })
+      nodes.map(node => (node.id === id ? { ...node, data: { ...node.data, ...updates } } : node))
     );
-  }, [id, data?.childOf, getNodes, setNodes]);
+  }, [id, getNodes, setNodes]);
 
   const handleTitleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);
@@ -429,7 +419,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
 
   // Auto-focus and center viewport on this node when expanding
   useEffect(() => {
-    if (!isExpanded || isPoppedOut || data?.childOf) return;
+    if (!isExpanded || isPoppedOut) return;
 
     // focus editor
     textareaRef.current?.focus();
@@ -442,7 +432,31 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
         fitView({ nodes: [node], padding: 0.2, duration: 300 });
       }
     });
-  }, [isExpanded, isPoppedOut, data?.childOf, id, getNode, fitView, updateNodeInternals]);
+  }, [isExpanded, isPoppedOut, id, getNode, fitView, updateNodeInternals]);
+
+  // Compute floating toolbox position relative to the node to avoid overlap
+  const updateToolboxPosition = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const width = Math.min(rect.width, window.innerWidth - 24);
+    const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
+    const above = rect.top > 220; // if enough space above, place above; else below
+    const top = above ? rect.top - 8 : rect.bottom + 8;
+    setToolboxPos({ top, left, width, above });
+  }, []);
+
+  useEffect(() => {
+    if (!isPoppedOut) return;
+    updateToolboxPosition();
+    const handler = () => updateToolboxPosition();
+    window.addEventListener('resize', handler);
+    window.addEventListener('scroll', handler, true);
+    return () => {
+      window.removeEventListener('resize', handler);
+      window.removeEventListener('scroll', handler, true);
+    };
+  }, [isPoppedOut, updateToolboxPosition]);
 
   // No width observers needed; container + w-full keeps elements aligned
 
@@ -522,44 +536,11 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => {
-              const childId = `${id}-child`;
-              if (isPoppedOut) {
-                removeNode(childId);
-                setIsPoppedOut(false);
-                return;
-              }
-              const parentNode = getNode(id);
-              if (!parentNode) return;
-              const existing = getNodes().some(n => n.id === childId);
-              if (existing) { setIsPoppedOut(true); return; }
-              const offsetX = 360;
-              const offsetY = 0;
-              const childNode: {
-                id: string;
-                type: 'markdown-node';
-                position: { x: number; y: number };
-                data: typeof data & { childOf: string; forceExpanded: boolean; childPanelOnly: boolean };
-              } = {
-                id: childId,
-                type: 'markdown-node',
-                position: {
-                  x: parentNode.position.x + offsetX,
-                  y: parentNode.position.y + offsetY,
-                },
-                data: {
-                  ...parentNode.data,
-                  title: `${title}`,
-                  content,
-                  childOf: id,
-                  forceExpanded: true,
-                  childPanelOnly: true,
-                },
-              };
-              addNode(childNode);
-              setIsPoppedOut(true);
+              setShowHelp(true);
+              setIsPoppedOut((prev) => !prev);
             }}
             className={`nodrag p-1.5 rounded transition-colors hover:bg-gray-200 dark:hover:bg-gray-700`}
-            title={isPoppedOut ? 'Dock editor' : 'Pop out editor as child node'}
+            title={isPoppedOut ? 'Dock toolbox' : 'Pop out toolbox'}
             type="button"
           >
             <ExternalLink className="w-3.5 h-3.5" />
@@ -586,7 +567,27 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
       
       {/* Comprehensive Markdown Reference Panel */}
       {showHelp && (
-        <div className="mb-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-xs overflow-hidden">
+        <div
+          className={`${isPoppedOut ? 'fixed z-[1000] max-w-[90vw] max-h-[85vh] p-2 shadow-xl' : 'mb-2'} bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-xs overflow-hidden`}
+          style={
+            isPoppedOut
+              ? {
+                  top: toolboxPos.top,
+                  left: toolboxPos.left,
+                  width: toolboxPos.width,
+                  transform: toolboxPos.above ? 'translateY(-100%)' : undefined,
+                }
+              : undefined
+          }
+        >
+          {isPoppedOut && (
+            <div className="flex items-center justify-between mb-1 px-1">
+              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">Toolbox</div>
+              <button onClick={() => setIsPoppedOut(false)} className="nodrag p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700" title="Dock toolbox" type="button">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           {/* Search Bar */}
           <div className="p-2 border-b border-gray-200 dark:border-gray-700">
             <div className="relative">
