@@ -66,10 +66,9 @@ export default function FlowContextMenu() {
     isOpen && (
       <div
         ref={ref}
-        className="absolute z-50"
-        style={{
-          transform: `translate(${position?.x}px, ${position?.y}px)`,
-        }}
+        className="absolute z-50 left-0 top-0"
+        data-x={position?.x ?? 0}
+        data-y={position?.y ?? 0}
       >
         <DropdownMenu open>
           <DropdownMenuTrigger />

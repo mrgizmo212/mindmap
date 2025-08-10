@@ -27,6 +27,10 @@ export type AppState = {
   draggedNodes: Map<string, AppNode>;
   connectionSites: Map<string, PotentialConnection>;
   potentialConnection?: PotentialConnection;
+  markdownDrawer?: {
+    nodeId: string;
+    width: number;
+  };
 };
 
 /**
@@ -80,6 +84,7 @@ export type AppActions = {
     options?: { exclude?: string[]; type?: 'source' | 'target' },
   ) => void;
   resetPotentialConnection: () => void;
+  setMarkdownDrawer: (drawer: { nodeId: string; width: number } | undefined) => void;
 };
 
 export type AppStore = AppState & AppActions;
@@ -257,6 +262,10 @@ export function createAppStore(
       onNodeDragStop: () => {
         set({ draggedNodes: new Map() });
         set({ potentialConnection: undefined });
+      },
+      
+      setMarkdownDrawer: (drawer) => {
+        set({ markdownDrawer: drawer });
       },
     })),
   );

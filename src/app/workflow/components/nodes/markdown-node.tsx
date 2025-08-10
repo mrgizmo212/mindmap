@@ -21,12 +21,14 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   const [showHelp, setShowHelp] = useState(false);
   const [activeTab, setActiveTab] = useState('text');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isPoppedOut, setIsPoppedOut] = useState(false);
-  const [toolboxPos, setToolboxPos] = useState<{ top: number; left: number; width: number; above: boolean }>({ top: 0, left: 0, width: 600, above: false });
+  // Drawer mode: toolbox is an absolutely positioned child that slides out from the right edge
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const setNodes = useAppStore((state) => state.setNodes);
   const getNodes = useAppStore((state) => state.getNodes);
+  const setMarkdownDrawer = useAppStore((state) => state.setMarkdownDrawer);
+  const markdownDrawer = useAppStore((state) => state.markdownDrawer);
+  const isPoppedOut = markdownDrawer?.nodeId === id;
   const { getNode, fitView } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   
@@ -34,6 +36,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   const [history, setHistory] = useState<string[]>([data?.content || '']);
   const [historyIndex, setHistoryIndex] = useState(0);
   const isUpdatingFromHistory = useRef(false);
+  const lastSavedContent = useRef(data?.content || '');
 
   const updateNodeData = useCallback((updates: Partial<typeof data>) => {
     const nodes = getNodes();
@@ -48,9 +51,11 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   }, [updateNodeData]);
 
   const handleContentChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const textarea = e.currentTarget;
+    const selectionStart = textarea.selectionStart;
+    const selectionEnd = textarea.selectionEnd;
     const newContent = e.target.value;
     setContent(newContent);
-    updateNodeData({ content: newContent });
     
     // Add to history if not updating from history
     if (!isUpdatingFromHistory.current) {
@@ -66,7 +71,21 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
       setHistoryIndex(newHistory.length - 1);
     }
     isUpdatingFromHistory.current = false;
-  }, [updateNodeData, history, historyIndex]);
+
+    // If something stole focus during re-render, immediately restore it and caret
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      if (document.activeElement !== el) {
+        el.focus();
+      }
+      try {
+        el.setSelectionRange(selectionStart, selectionEnd);
+      } catch {}
+    });
+  }, [history, historyIndex]);
+
+  // Avoid writing to global node data while editing; commit on close/blur instead
 
   // Basic markdown validation
   const getContentStats = useCallback(() => {
@@ -96,9 +115,16 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
   }, []);
 
   const handleClose = useCallback(() => {
-    setIsPoppedOut(false);
+    // Save content immediately when closing if it has changed
+    if (content !== lastSavedContent.current) {
+      updateNodeData({ content });
+      lastSavedContent.current = content;
+    }
+    if (isPoppedOut) {
+      setMarkdownDrawer(undefined);
+    }
     setIsExpanded(false);
-  }, []);
+  }, [content, updateNodeData, isPoppedOut, setMarkdownDrawer]);
   
   // Helper function to check if an item matches search query
   const matchesSearch = useCallback((syntax: string, description: string) => {
@@ -116,6 +142,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
       setContent(previousContent);
       setHistoryIndex(newIndex);
       updateNodeData({ content: previousContent });
+      lastSavedContent.current = previousContent;
     }
   }, [history, historyIndex, updateNodeData]);
   
@@ -128,6 +155,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
       setContent(nextContent);
       setHistoryIndex(newIndex);
       updateNodeData({ content: nextContent });
+      lastSavedContent.current = nextContent;
     }
   }, [history, historyIndex, updateNodeData]);
 
@@ -343,7 +371,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
     
     const updatedContent = beforeText + newText + afterText;
     setContent(updatedContent);
-    updateNodeData({ content: updatedContent });
+    // Don't update node data immediately - let the debounced effect handle it
     
     // Add to history
     const newHistory = history.slice(0, historyIndex + 1);
@@ -359,7 +387,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
       textarea.focus();
       textarea.setSelectionRange(start + cursorOffset, start + cursorOffset);
     }, 0);
-  }, [content, updateNodeData, history, historyIndex]);
+  }, [content, history, historyIndex]);
 
   // Handle wheel events to isolate scrolling within the textarea
   const handleWheel = useCallback((e: React.WheelEvent<HTMLTextAreaElement>) => {
@@ -376,14 +404,15 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
     }
   }, []);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Keep all key events inside the editor so React Flow doesn't hijack them (e.g., Space for pan)
+    e.stopPropagation();
+
     if (e.key === 'Escape') {
-      setIsPoppedOut(false);
+      if (isPoppedOut) {
+        setMarkdownDrawer(undefined);
+      }
       setIsExpanded(false);
-    }
-    // Prevent closing on Enter key
-    if (e.key === 'Enter') {
-      e.stopPropagation();
     }
     
     // Markdown shortcuts and undo/redo (Ctrl/Cmd + key)
@@ -415,7 +444,25 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
           break;
       }
     }
-  }, [applyFormat, undo, redo]);
+  }, [applyFormat, undo, redo, isPoppedOut, setMarkdownDrawer]);
+
+  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ensure React Flow never captures keyup either
+    e.stopPropagation();
+  }, []);
+
+  // Capture-phase handlers to block React Flow/global listeners (spacebar pan/scroll)
+  const handleKeyDownCapture = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation();
+    // Prevent page scroll / RF pan on space when typing
+    if (!e.ctrlKey && !e.metaKey && e.key === ' ') {
+      e.preventDefault();
+    }
+  }, []);
+
+  const handleKeyUpCapture = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation();
+  }, []);
 
   // Auto-focus and center viewport on this node when expanding
   useEffect(() => {
@@ -434,110 +481,125 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
     });
   }, [isExpanded, isPoppedOut, id, getNode, fitView, updateNodeInternals]);
 
-  // Compute floating toolbox position relative to the node to avoid overlap
-  const updateToolboxPosition = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const width = Math.min(rect.width, window.innerWidth - 24);
-    const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
-    const above = rect.top > 220; // if enough space above, place above; else below
-    const top = above ? rect.top - 8 : rect.bottom + 8;
-    setToolboxPos({ top, left, width, above });
-  }, []);
+  // Insert text at cursor position
+  const insertText = useCallback((text: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const currentContent = content;
+    const newContent = currentContent.substring(0, start) + text + currentContent.substring(end);
+    
+    setContent(newContent);
+    
+    // Move cursor after inserted text
+    setTimeout(() => {
+      textarea.focus();
+      const newPos = start + text.length;
+      textarea.setSelectionRange(newPos, newPos);
+    }, 0);
+  }, [content]);
 
+  // Handle insert events from global drawer
   useEffect(() => {
-    if (!isPoppedOut) return;
-    updateToolboxPosition();
-    const handler = () => updateToolboxPosition();
-    window.addEventListener('resize', handler);
-    window.addEventListener('scroll', handler, true);
-    return () => {
-      window.removeEventListener('resize', handler);
-      window.removeEventListener('scroll', handler, true);
+    const handleInsert = (e: CustomEvent) => {
+      if (e.detail.nodeId !== id || !textareaRef.current) return;
+      insertText(e.detail.text);
     };
-  }, [isPoppedOut, updateToolboxPosition]);
+    
+    window.addEventListener('markdown-insert', handleInsert as EventListener);
+    return () => window.removeEventListener('markdown-insert', handleInsert as EventListener);
+  }, [id, insertText]);
 
   // No width observers needed; container + w-full keeps elements aligned
 
   // Editor content used for both docked and popped-out modes
-  const ExpandedEditor: React.FC = () => (
-    <div className="relative">
-      {/* Formatting toolbar */}
-      <div className="flex items-center gap-1 mb-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-md">
-        <button
-          onClick={undo}
-          disabled={historyIndex === 0}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          title="Undo (Ctrl+Z)"
-          type="button"
-        >
-          <Undo2 className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={redo}
-          disabled={historyIndex === history.length - 1}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
-          type="button"
-        >
-          <Redo2 className="w-3.5 h-3.5" />
-        </button>
-        <div className="w-px h-5 bg-gray-300 dark:bg-gray-600 mx-1" />
-        <button
-          onClick={() => applyFormat('bold')}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          title="Bold (Ctrl+B)"
-          type="button"
-        >
-          <Bold className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => applyFormat('italic')}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          title="Italic (Ctrl+I)"
-          type="button"
-        >
-          <Italic className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => applyFormat('code')}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          title="Code"
-          type="button"
-        >
-          <Code className="w-3.5 h-3.5" />
-        </button>
-        <div className="w-px h-5 bg-gray-300 dark:bg-gray-600 mx-1" />
-        <button
-          onClick={() => applyFormat('heading')}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          title="Heading"
-          type="button"
-        >
-          <Hash className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => applyFormat('list')}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          title="List"
-          type="button"
-        >
-          <List className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => applyFormat('link')}
-          className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          title="Link (Ctrl+K)"
-          type="button"
-        >
-          <Link2 className="w-3.5 h-3.5" />
-        </button>
-        <div className="ml-auto flex items-center gap-2">
+  const renderExpandedEditor = () => (
+          <div className="relative">
+            {/* Formatting toolbar */}
+            <div className="flex items-center gap-1 mb-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-md">
+              <button
+                onClick={undo}
+                disabled={historyIndex === 0}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Undo (Ctrl+Z)"
+                type="button"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={redo}
+                disabled={historyIndex === history.length - 1}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+                type="button"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+              <div className="w-px h-5 bg-gray-300 dark:bg-gray-600 mx-1" />
+              <button
+                onClick={() => applyFormat('bold')}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="Bold (Ctrl+B)"
+                type="button"
+              >
+                <Bold className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => applyFormat('italic')}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="Italic (Ctrl+I)"
+                type="button"
+              >
+                <Italic className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => applyFormat('code')}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="Code"
+                type="button"
+              >
+                <Code className="w-3.5 h-3.5" />
+              </button>
+              <div className="w-px h-5 bg-gray-300 dark:bg-gray-600 mx-1" />
+              <button
+                onClick={() => applyFormat('heading')}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="Heading"
+                type="button"
+              >
+                <Hash className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => applyFormat('list')}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="List"
+                type="button"
+              >
+                <List className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => applyFormat('link')}
+                className="nodrag p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="Link (Ctrl+K)"
+                type="button"
+              >
+                <Link2 className="w-3.5 h-3.5" />
+              </button>
+              <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => {
               setShowHelp(true);
-              setIsPoppedOut((prev) => !prev);
+              if (isPoppedOut) {
+                setMarkdownDrawer(undefined);
+              } else {
+                const container = containerRef.current;
+                const containerWidth = container?.clientWidth ?? 640;
+                const maxViewport = Math.min(720, window.innerWidth - 48);
+                const desired = Math.min(Math.max(Math.floor(containerWidth * 0.45), 360), maxViewport);
+                setMarkdownDrawer({ nodeId: id, width: desired });
+              }
             }}
             className={`nodrag p-1.5 rounded transition-colors hover:bg-gray-200 dark:hover:bg-gray-700`}
             title={isPoppedOut ? 'Dock toolbox' : 'Pop out toolbox'}
@@ -545,161 +607,143 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
-          <button
-            onClick={() => setShowHelp(!showHelp)}
-            className={`nodrag p-1.5 rounded transition-colors ${
-              showHelp 
-                ? 'bg-blue-500 text-white hover:bg-blue-600' 
-                : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-            }`}
-            title="Markdown Reference"
-            type="button"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-          </button>
-          <div className="text-xs text-gray-500 px-2 flex items-center gap-2">
-            <span>History: {historyIndex + 1}/{history.length}</span>
-            <span>•</span>
-            <span>Spell check ✓</span>
-          </div>
-        </div>
-      </div>
-      
-      {/* Comprehensive Markdown Reference Panel */}
-      {showHelp && (
+                <button
+                  onClick={() => setShowHelp(!showHelp)}
+                  className={`nodrag p-1.5 rounded transition-colors ${
+                    showHelp 
+                      ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                      : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                  }`}
+                  title="Markdown Reference"
+                  type="button"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                </button>
+                <div className="text-xs text-gray-500 px-2 flex items-center gap-2">
+                  <span>History: {historyIndex + 1}/{history.length}</span>
+                  <span>•</span>
+                  <span>Spell check ✓</span>
+                </div>
+              </div>
+            </div>
+            
+            {/* Comprehensive Markdown Reference Panel */}
+            {showHelp && !isPoppedOut && (
         <div
-          className={`${isPoppedOut ? 'fixed z-[1000] max-w-[90vw] max-h-[85vh] p-2 shadow-xl' : 'mb-2'} bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-xs overflow-hidden`}
-          style={
-            isPoppedOut
-              ? {
-                  top: toolboxPos.top,
-                  left: toolboxPos.left,
-                  width: toolboxPos.width,
-                  transform: toolboxPos.above ? 'translateY(-100%)' : undefined,
-                }
-              : undefined
-          }
+          className="mb-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md text-xs overflow-hidden"
         >
-          {isPoppedOut && (
-            <div className="flex items-center justify-between mb-1 px-1">
-              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">Toolbox</div>
-              <button onClick={() => setIsPoppedOut(false)} className="nodrag p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700" title="Dock toolbox" type="button">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-          {/* Search Bar */}
-          <div className="p-2 border-b border-gray-200 dark:border-gray-700">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search markdown syntax..."
-                className="nodrag w-full pl-7 pr-2 py-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-          
-          {/* Tab Navigation */}
-          <div className="flex items-center gap-1 p-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
-            <button
-              onClick={() => setActiveTab('text')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'text' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Type className="w-3 h-3" />
-              <span>Text</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('headings')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'headings' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Heading className="w-3 h-3" />
-              <span>Headings</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('lists')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'lists' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <List className="w-3 h-3" />
-              <span>Lists</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('links')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'links' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Link2 className="w-3 h-3" />
-              <span>Links</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('code')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'code' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Code className="w-3 h-3" />
-              <span>Code</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('tables')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'tables' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Table className="w-3 h-3" />
-              <span>Tables</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('advanced')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'advanced' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Zap className="w-3 h-3" />
-              <span>Advanced</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('extended')}
-              className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                activeTab === 'extended' 
-                  ? 'bg-blue-500 text-white' 
-                  : 'hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-              type="button"
-            >
-              <Settings className="w-3 h-3" />
-              <span>Extended</span>
-            </button>
+                {/* Search Bar */}
+                <div className="p-2 border-b border-gray-200 dark:border-gray-700">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-3 h-3 text-gray-400" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search markdown syntax..."
+                      className="nodrag w-full pl-7 pr-2 py-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                
+                {/* Tab Navigation */}
+                <div className="flex items-center gap-1 p-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+                  <button
+                    onClick={() => setActiveTab('text')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'text' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Type className="w-3 h-3" />
+                    <span>Text</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('headings')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'headings' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Heading className="w-3 h-3" />
+                    <span>Headings</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('lists')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'lists' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <List className="w-3 h-3" />
+                    <span>Lists</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('links')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'links' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Link2 className="w-3 h-3" />
+                    <span>Links</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('code')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'code' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Code className="w-3 h-3" />
+                    <span>Code</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('tables')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'tables' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Table className="w-3 h-3" />
+                    <span>Tables</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('advanced')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'advanced' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Zap className="w-3 h-3" />
+                    <span>Advanced</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('extended')}
+                    className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
+                      activeTab === 'extended' 
+                        ? 'bg-blue-500 text-white' 
+                        : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                    type="button"
+                  >
+                    <Settings className="w-3 h-3" />
+                    <span>Extended</span>
+                  </button>
             <button
               onClick={() => setActiveTab('vars')}
               className={`nodrag flex items-center gap-1 px-2 py-1 rounded transition-colors ${
@@ -712,501 +756,506 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
               <Calendar className="w-3 h-3" />
               <span>Variables</span>
             </button>
-          </div>
-          
-          {/* Tab Content */}
-          <div className="p-3 max-h-[400px] overflow-y-auto">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                </div>
+                
+                {/* Tab Content */}
+                <div className="p-3 max-h-[400px] overflow-y-auto">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2">
               {/* The existing tab panels remain unchanged below */}
-              {/* Text & Style Tab */}
-              {activeTab === 'text' && (
-                <>
-                  {matchesSearch('**bold**', 'bold text') && (
-                    <button
-                      onClick={() => applyFormat('bold')}
-                      className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                      type="button"
-                    >
-                      <Bold className="w-3 h-3" />
-                      <code className="bg-gray-200 dark:bg-gray-800 px-1">**bold**</code>
-                      <span className="text-gray-500">→ <strong>bold</strong></span>
-                    </button>
-                  )}
+                    {/* Text & Style Tab */}
+                    {activeTab === 'text' && (
+                      <>
+                        {matchesSearch('**bold**', 'bold text') && (
+                          <button
+                            onClick={() => applyFormat('bold')}
+                            className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                            type="button"
+                          >
+                            <Bold className="w-3 h-3" />
+                            <code className="bg-gray-200 dark:bg-gray-800 px-1">**bold**</code>
+                            <span className="text-gray-500">→ <strong>bold</strong></span>
+                          </button>
+                        )}
                   
-                  <button
-                    onClick={() => applyFormat('italic')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Italic className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">*italic*</code>
-                    <span className="text-gray-500">→ <em>italic</em></span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('bold-italic')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Bold className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">***bold italic***</code>
-                    <span className="text-gray-500">→ <strong><em>both</em></strong></span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('strike')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Type className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">~~strike~~</code>
-                    <span className="text-gray-500">→ <del>strike</del></span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('underline')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Type className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;u&gt;text&lt;/u&gt;</code>
-                    <span className="text-gray-500">→ <u>underline</u></span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('highlight')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Type className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">==highlight==</code>
-                    <span className="text-gray-500">→ <mark>highlight</mark></span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('subscript')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Type className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;sub&gt;2&lt;/sub&gt;</code>
-                    <span className="text-gray-500">→ H<sub>2</sub>O</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('superscript')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Type className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;sup&gt;2&lt;/sup&gt;</code>
-                    <span className="text-gray-500">→ X<sup>2</sup></span>
-                  </button>
-                </>
-              )}
-              
-              {/* Headings Tab */}
-              {activeTab === 'headings' && (
-                <>
-                  {[1, 2, 3, 4, 5, 6].map((level) => (
-                    <button
-                      key={`heading${level}`}
-                      onClick={() => applyFormat(level === 1 ? 'heading1' : level === 2 ? 'heading' : `heading${level}`)}
-                      className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                      type="button"
-                    >
-                      <Hash className="w-3 h-3" />
-                      <code className="bg-gray-200 dark:bg-gray-800 px-1">{`${'#'.repeat(level)} Heading`}</code>
-                      <span className="text-gray-500">→ H{level}</span>
-                    </button>
-                  ))}
-                  
-                  <button
-                    onClick={() => applyFormat('heading-alt1')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Hash className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">Alt H1 (===)</code>
-                    <span className="text-gray-500">→ H1</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('heading-alt2')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Hash className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">Alt H2 (---)</code>
-                    <span className="text-gray-500">→ H2</span>
-                  </button>
-                </>
-              )}
-              
-              {/* Lists Tab */}
-              {activeTab === 'lists' && (
-                <>
-                  <button
-                    onClick={() => applyFormat('list')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <List className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">- item</code>
-                    <span className="text-gray-500">→ • item</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('numbered')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <ListOrdered className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">1. item</code>
-                    <span className="text-gray-500">→ 1. item</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('task')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <CheckSquare className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">- [ ] task</code>
-                    <span className="text-gray-500">→ ☐ task</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('task-checked')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <CheckSquare className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">- [x] done</code>
-                    <span className="text-gray-500">→ ☑ done</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('nested-list')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <List className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">  - nested</code>
-                    <span className="text-gray-500">→ indented</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('definition')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <AlignLeft className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">Term\n: Def</code>
-                    <span className="text-gray-500">→ definition list</span>
-                  </button>
-                </>
-              )}
-              
-              {/* Links & Media Tab */}
-              {activeTab === 'links' && (
-                <>
-                  <button
-                    onClick={() => applyFormat('link')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Link2 className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">[text](url)</code>
-                    <span className="text-gray-500">→ link</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('reference-link')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Link2 className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">[text][ref]</code>
-                    <span className="text-gray-500">→ ref link</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('auto-link')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;url&gt;</code>
-                    <span className="text-gray-500">→ auto link</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('image')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <ImageIcon className="w-3 h-3" aria-hidden="true" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">![alt](url)</code>
-                    <span className="text-gray-500">→ image</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('video')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <FileCode className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;video&gt;</code>
-                    <span className="text-gray-500">→ video</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('badge')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Zap className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">![Badge](...)</code>
-                    <span className="text-gray-500">→ badge</span>
-                  </button>
-                </>
-              )}
-              
-              {/* Code Tab */}
-              {activeTab === 'code' && (
-                <>
-                  <button
-                    onClick={() => applyFormat('code')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Code className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">`code`</code>
-                    <span className="text-gray-500">→ inline</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('codeblock')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Terminal className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">```lang</code>
-                    <span className="text-gray-500">→ block</span>
-                  </button>
-                  
-                  <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded">
-                    <div className="text-xs font-semibold mb-1">Common Languages:</div>
-                    <div className="flex flex-wrap gap-1">
-                      {['js', 'json', 'python', 'java', 'cpp', 'html', 'css', 'sql', 'bash', 'typescript', 'jsx', 'tsx', 'yaml', 'xml', 'markdown'].map(lang => (
                         <button
-                          key={lang}
-                          onClick={() => {
-                            const textarea = textareaRef.current;
-                            if (!textarea) return;
-                            const start = textarea.selectionStart;
-                            const end = textarea.selectionEnd;
-                            const selectedText = content.substring(start, end);
-                            const newText = `\`\`\`${lang}\n${selectedText || 'code here'}\n\`\`\``;
-                            const beforeText = content.substring(0, start);
-                            const afterText = content.substring(end);
-                            const updatedContent = beforeText + newText + afterText;
-                            setContent(updatedContent);
-                            updateNodeData({ content: updatedContent });
-                          }}
-                          className="nodrag px-2 py-0.5 bg-white dark:bg-gray-700 rounded text-xs hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"
+                          onClick={() => applyFormat('italic')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
                           type="button"
                         >
-                          {lang}
+                          <Italic className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">*italic*</code>
+                          <span className="text-gray-500">→ <em>italic</em></span>
                         </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-              
-              {/* Tables Tab */}
-              {activeTab === 'tables' && (
-                <>
-                  <button
-                    onClick={() => applyFormat('table')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer col-span-2"
-                    type="button"
-                  >
-                    <Table className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">| Col1 | Col2 |</code>
-                    <span className="text-gray-500">→ table</span>
-                  </button>
+                        
+                        <button
+                          onClick={() => applyFormat('bold-italic')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Bold className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">***bold italic***</code>
+                          <span className="text-gray-500">→ <strong><em>both</em></strong></span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('strike')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Type className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">~~strike~~</code>
+                          <span className="text-gray-500">→ <del>strike</del></span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('underline')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Type className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;u&gt;text&lt;/u&gt;</code>
+                          <span className="text-gray-500">→ <u>underline</u></span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('highlight')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Type className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">==highlight==</code>
+                          <span className="text-gray-500">→ <mark>highlight</mark></span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('subscript')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Type className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;sub&gt;2&lt;/sub&gt;</code>
+                          <span className="text-gray-500">→ H<sub>2</sub>O</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('superscript')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Type className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;sup&gt;2&lt;/sup&gt;</code>
+                          <span className="text-gray-500">→ X<sup>2</sup></span>
+                        </button>
+                      </>
+                    )}
                   
-                  <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded">
-                    <div className="text-xs font-semibold mb-1">Table Example:</div>
+                    {/* Headings Tab */}
+                    {activeTab === 'headings' && (
+                      <>
+                        {[1, 2, 3, 4, 5, 6].map((level) => (
+                          <button
+                            key={`heading${level}`}
+                            onClick={() => applyFormat(level === 1 ? 'heading1' : level === 2 ? 'heading' : `heading${level}`)}
+                            className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                            type="button"
+                          >
+                            <Hash className="w-3 h-3" />
+                            <code className="bg-gray-200 dark:bg-gray-800 px-1">{`${'#'.repeat(level)} Heading`}</code>
+                            <span className="text-gray-500">→ H{level}</span>
+                          </button>
+                        ))}
+                        
+                        <button
+                          onClick={() => applyFormat('heading-alt1')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Hash className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">Alt H1 (===)</code>
+                          <span className="text-gray-500">→ H1</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('heading-alt2')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Hash className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">Alt H2 (---)</code>
+                          <span className="text-gray-500">→ H2</span>
+                        </button>
+                      </>
+                    )}
+                  
+                    {/* Lists Tab */}
+                    {activeTab === 'lists' && (
+                      <>
+                        <button
+                          onClick={() => applyFormat('list')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <List className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">- item</code>
+                          <span className="text-gray-500">→ • item</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('numbered')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <ListOrdered className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">1. item</code>
+                          <span className="text-gray-500">→ 1. item</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('task')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <CheckSquare className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">- [ ] task</code>
+                          <span className="text-gray-500">→ ☐ task</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('task-checked')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <CheckSquare className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">- [x] done</code>
+                          <span className="text-gray-500">→ ☑ done</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('nested-list')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <List className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">  - nested</code>
+                          <span className="text-gray-500">→ indented</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('definition')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <AlignLeft className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">Term\n: Def</code>
+                          <span className="text-gray-500">→ definition list</span>
+                        </button>
+                      </>
+                    )}
+                  
+                    {/* Links & Media Tab */}
+                    {activeTab === 'links' && (
+                      <>
+                        <button
+                          onClick={() => applyFormat('link')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Link2 className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">[text](url)</code>
+                          <span className="text-gray-500">→ link</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('reference-link')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Link2 className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">[text][ref]</code>
+                          <span className="text-gray-500">→ ref link</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('auto-link')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;url&gt;</code>
+                          <span className="text-gray-500">→ auto link</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('image')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <ImageIcon className="w-3 h-3" aria-hidden="true" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">![alt](url)</code>
+                          <span className="text-gray-500">→ image</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('video')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <FileCode className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;video&gt;</code>
+                          <span className="text-gray-500">→ video</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('badge')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Zap className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">![Badge](...)</code>
+                          <span className="text-gray-500">→ badge</span>
+                        </button>
+                      </>
+                    )}
+                  
+                    {/* Code Tab */}
+                    {activeTab === 'code' && (
+                      <>
+                        <button
+                          onClick={() => applyFormat('code')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Code className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">`code`</code>
+                          <span className="text-gray-500">→ inline</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('codeblock')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Terminal className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">```lang</code>
+                          <span className="text-gray-500">→ block</span>
+                        </button>
+                        
+                        <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded">
+                          <div className="text-xs font-semibold mb-1">Common Languages:</div>
+                          <div className="flex flex-wrap gap-1">
+                            {['js', 'json', 'python', 'java', 'cpp', 'html', 'css', 'sql', 'bash', 'typescript', 'jsx', 'tsx', 'yaml', 'xml', 'markdown'].map(lang => (
+                              <button
+                                key={lang}
+                                onClick={() => {
+                                  const textarea = textareaRef.current;
+                                  if (!textarea) return;
+                                  const start = textarea.selectionStart;
+                                  const end = textarea.selectionEnd;
+                                  const selectedText = content.substring(start, end);
+                                  const newText = `\`\`\`${lang}\n${selectedText || 'code here'}\n\`\`\``;
+                                  const beforeText = content.substring(0, start);
+                                  const afterText = content.substring(end);
+                                  const updatedContent = beforeText + newText + afterText;
+                                  setContent(updatedContent);
+                            // Don't update node data immediately - let the debounced effect handle it
+                            setTimeout(() => {
+                              textarea.focus();
+                              const pos = start + 4 + lang.length;
+                              textarea.setSelectionRange(pos, pos);
+                            }, 0);
+                                }}
+                                className="nodrag px-2 py-0.5 bg-white dark:bg-gray-700 rounded text-xs hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"
+                                type="button"
+                              >
+                                {lang}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  
+                    {/* Tables Tab */}
+                    {activeTab === 'tables' && (
+                      <>
+                        <button
+                          onClick={() => applyFormat('table')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer col-span-2"
+                          type="button"
+                        >
+                          <Table className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">| Col1 | Col2 |</code>
+                          <span className="text-gray-500">→ table</span>
+                        </button>
+                        
+                        <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded">
+                          <div className="text-xs font-semibold mb-1">Table Example:</div>
                     <pre className="text-xs bg-white dark:bg-gray-900 p-2 rounded overflow-x-auto">{`| Header 1 | Header 2 | Header 3 |
 |----------|:--------:|---------:|
 | Left     | Center   | Right    |
 | Cell 1   | Cell 2   | Cell 3   |`}</pre>
-                    <div className="text-xs text-gray-500 mt-1">
-                      • Use : for alignment (left, center, right)
-                    </div>
-                  </div>
-                </>
-              )}
-              
-              {/* Advanced Tab */}
-              {activeTab === 'advanced' && (
-                <>
-                  <button
-                    onClick={() => applyFormat('blockquote')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Quote className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; quote</code>
-                    <span className="text-gray-500">→ blockquote</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('hr')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Minus className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">---</code>
-                    <span className="text-gray-500">→ horizontal rule</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('footnote')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Type className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">Text[^1]</code>
-                    <span className="text-gray-500">→ footnote</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('collapsible')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <ChevronRight className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;details&gt;</code>
-                    <span className="text-gray-500">→ collapsible</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('comment')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <MessageSquare className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;!-- --&gt;</code>
-                    <span className="text-gray-500">→ comment</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('escape')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Code className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">\*escape\*</code>
-                    <span className="text-gray-500">→ literal *</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('math-inline')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Zap className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">$x=y^2$</code>
-                    <span className="text-gray-500">→ inline math</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('math-block')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Zap className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">$$...$$</code>
-                    <span className="text-gray-500">→ math block</span>
-                  </button>
-                </>
-              )}
-              
-              {/* Extended (GitHub/Platform-Specific) Tab */}
-              {activeTab === 'extended' && (
-                <>
-                  <button
-                    onClick={() => applyFormat('emoji')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <Smile className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">:smile:</code>
-                    <span className="text-gray-500">→ 😄</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('mention')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <User className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">@username</code>
-                    <span className="text-gray-500">→ mention</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('issue')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <GitPullRequest className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">#123</code>
-                    <span className="text-gray-500">→ issue/PR</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('alert-note')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <AlertCircle className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; **Note**</code>
-                    <span className="text-gray-500">→ alert</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('alert-warning')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <AlertCircle className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; **Warning**</code>
-                    <span className="text-gray-500">→ warning</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => applyFormat('alert-important')}
-                    className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
-                    type="button"
-                  >
-                    <AlertCircle className="w-3 h-3" />
-                    <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; **Important**</code>
-                    <span className="text-gray-500">→ important</span>
-                  </button>
-                  
-                  <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded">
-                    <div className="text-xs text-gray-500">
-                      <strong>Note:</strong> These features depend on your Markdown processor (GitHub, Discord, etc.)
-                    </div>
-                  </div>
-                </>
-              )}
+                          <div className="text-xs text-gray-500 mt-1">
+                            • Use : for alignment (left, center, right)
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    
+                    {/* Advanced Tab */}
+                    {activeTab === 'advanced' && (
+                      <>
+                        <button
+                          onClick={() => applyFormat('blockquote')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Quote className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; quote</code>
+                          <span className="text-gray-500">→ blockquote</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('hr')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Minus className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">---</code>
+                          <span className="text-gray-500">→ horizontal rule</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('footnote')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Type className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">Text[^1]</code>
+                          <span className="text-gray-500">→ footnote</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('collapsible')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <ChevronRight className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;details&gt;</code>
+                          <span className="text-gray-500">→ collapsible</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('comment')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <MessageSquare className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&lt;!-- --&gt;</code>
+                          <span className="text-gray-500">→ comment</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('escape')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Code className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">\*escape\*</code>
+                          <span className="text-gray-500">→ literal *</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('math-inline')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Zap className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">$x=y^2$</code>
+                          <span className="text-gray-500">→ inline math</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('math-block')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Zap className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">$$...$$</code>
+                          <span className="text-gray-500">→ math block</span>
+                        </button>
+                      </>
+                    )}
+                    
+                    {/* Extended (GitHub/Platform-Specific) Tab */}
+                    {activeTab === 'extended' && (
+                      <>
+                        <button
+                          onClick={() => applyFormat('emoji')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <Smile className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">:smile:</code>
+                          <span className="text-gray-500">→ 😄</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('mention')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <User className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">@username</code>
+                          <span className="text-gray-500">→ mention</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('issue')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <GitPullRequest className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">#123</code>
+                          <span className="text-gray-500">→ issue/PR</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('alert-note')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <AlertCircle className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; **Note**</code>
+                          <span className="text-gray-500">→ alert</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('alert-warning')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <AlertCircle className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; **Warning**</code>
+                          <span className="text-gray-500">→ warning</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => applyFormat('alert-important')}
+                          className="nodrag flex items-center gap-2 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-left transition-colors cursor-pointer"
+                          type="button"
+                        >
+                          <AlertCircle className="w-3 h-3" />
+                          <code className="bg-gray-200 dark:bg-gray-800 px-1">&gt; **Important**</code>
+                          <span className="text-gray-500">→ important</span>
+                        </button>
+                        
+                        <div className="col-span-2 p-2 bg-gray-100 dark:bg-gray-800 rounded">
+                          <div className="text-xs text-gray-500">
+                            <strong>Note:</strong> These features depend on your Markdown processor (GitHub, Discord, etc.)
+                          </div>
+                        </div>
+                      </>
+                    )}
 
               {/* Variables Tab */}
               {activeTab === 'vars' && (
@@ -1228,7 +1277,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                         const afterText = content.substring(end);
                         const updatedContent = beforeText + value + afterText;
                         setContent(updatedContent);
-                        updateNodeData({ content: updatedContent });
+                        // Don't update node data immediately - let the debounced effect handle it
                         setTimeout(() => {
                           textarea.focus();
                           const pos = start + value.length;
@@ -1247,45 +1296,59 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
                   </div>
                 </>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-      
+                  </div>
+                </div>
+              </div>
+            )}
+            
       {!data?.childPanelOnly && (
-        <div className="overflow-auto inline-block min-w-full">
-          <textarea
-            ref={textareaRef}
-            value={content}
-            onChange={handleContentChange}
-            onKeyDown={handleKeyDown}
-            onWheel={handleWheel}
-            spellCheck={true}
-            autoCorrect="on"
-            autoCapitalize="sentences"
+            <div className="overflow-auto inline-block min-w-full">
+              <textarea
+                ref={textareaRef}
+            draggable={false}
+                value={content}
+                onChange={handleContentChange}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDownCapture={(e) => e.stopPropagation()}
+                onKeyDown={handleKeyDown}
+            onKeyDownCapture={handleKeyDownCapture}
+            onKeyUp={handleKeyUp}
+            onKeyUpCapture={handleKeyUpCapture}
+            onBlur={() => {
+              const latest = textareaRef.current?.value ?? content;
+              if (latest !== lastSavedContent.current) {
+                updateNodeData({ content: latest });
+                lastSavedContent.current = latest;
+              }
+            }}
+                onWheel={handleWheel}
+                spellCheck={true}
+                autoCorrect="on"
+                autoCapitalize="sentences"
             className="nodrag nowheel w-full min-w-full h-64 p-4 text-sm font-mono bg-white dark:bg-gray-900 border-2 border-blue-500 rounded-md overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize"
-            placeholder="Enter markdown, code, or plain text... (Esc to close)"
-          />
-          <div className="mt-2 px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 w-full">
-            <div className="flex items-center gap-3">
-              <span>{getContentStats().words} words</span>
-              <span>{getContentStats().lines} lines</span>
-              <span>~{getContentStats().tokens} tokens</span>
-              {getContentStats().headings > 0 && (
-                <span>{getContentStats().headings} headings</span>
-              )}
-              {getContentStats().codeBlocks > 0 && (
-                <span>{getContentStats().codeBlocks} code blocks</span>
-              )}
-              {getContentStats().hasUnclosedCodeBlock && (
-                <span className="text-yellow-500 font-semibold">⚠ Unclosed code block</span>
-              )}
+                placeholder="Enter markdown, code, or plain text... (Esc to close)"
+              />
+              <div className="mt-2 px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 w-full">
+                <div className="flex items-center gap-3">
+                  <span>{getContentStats().words} words</span>
+                  <span>{getContentStats().lines} lines</span>
+                  <span>~{getContentStats().tokens} tokens</span>
+                  {getContentStats().headings > 0 && (
+                    <span>{getContentStats().headings} headings</span>
+                  )}
+                  {getContentStats().codeBlocks > 0 && (
+                    <span>{getContentStats().codeBlocks} code blocks</span>
+                  )}
+                  {getContentStats().hasUnclosedCodeBlock && (
+                    <span className="text-yellow-500 font-semibold">⚠ Unclosed code block</span>
+                  )}
+                </div>
+                <span className="text-xs italic">Drag corner to resize</span>
+              </div>
             </div>
-            <span className="text-xs italic">Drag corner to resize</span>
-          </div>
-        </div>
       )}
-    </div>
+          </div>
   );
 
   return (
@@ -1312,7 +1375,7 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
         </div>
         
         {isExpanded ? (
-          <ExpandedEditor />
+          renderExpandedEditor()
         ) : (
           <div
             onDoubleClick={handleDoubleClick}

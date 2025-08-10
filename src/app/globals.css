@@ -10,6 +10,12 @@
   body {
     font-family: Arial, Helvetica, sans-serif;
   }
+  /* Context menu CSS variables for inline-style-free positioning */
+  [data-x][data-y] {
+    --ctx-x: attr(data-x px, 0px);
+    --ctx-y: attr(data-y px, 0px);
+    transform: translate(var(--ctx-x), var(--ctx-y));
+  }
 }
 
 @layer base {
@@ -47,6 +53,11 @@
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+  /* Ensure sidebar CSS variables always exist with sane defaults */
+  :root {
+    --sidebar-width: 16rem;
+    --sidebar-width-icon: 3rem;
   }
   .dark {
     --background: 0 0% 3.9%;
@@ -90,6 +101,30 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* Markdown drawer variables */
+  [data-md-drawer="true"][data-md-drawer-width] { width: attr(data-md-drawer-width px); }
+  /* right side */
+  [data-md-drawer="true"][data-md-drawer-side="right"][data-md-drawer-gap] {
+    left: 100%;
+    margin-left: attr(data-md-drawer-gap px);
+    right: auto;
+  }
+  /* left side */
+  [data-md-drawer="true"][data-md-drawer-side="left"][data-md-drawer-gap] {
+    right: 100%;
+    margin-right: attr(data-md-drawer-gap px);
+    left: auto;
+  }
+  
+  /* Global markdown drawer */
+  [data-drawer-width] {
+    width: attr(data-drawer-width px);
+  }
+  
+  /* Main content margin when drawer is open */
+  [data-drawer-margin] {
+    margin-right: attr(data-drawer-margin px);
   }
 }
 
