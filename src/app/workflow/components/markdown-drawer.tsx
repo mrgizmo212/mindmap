@@ -1,58 +1,112 @@
 'use client';
 
 import React from 'react';
-import { Search, Type, Hash, List, Code, Image, Link, Table, Minus, Calendar, Clock, User } from 'lucide-react';
+import {
+  Search,
+  Type,
+  Hash,
+  List,
+  Code,
+  Image,
+  Link as LinkIcon,
+  Table,
+  Minus,
+  Calendar,
+  Clock,
+  User,
+  Quote,
+  ChevronRight,
+  MessageSquare,
+  Zap,
+  FileCode,
+  Smile,
+  AlertCircle,
+  GitPullRequest,
+} from 'lucide-react';
 import { useAppStore } from '@/app/workflow/store';
 import { Button } from '@/components/ui/button';
 
-const toolboxItems = {
+type ToolboxItem = { icon: any; label: string; snippet: string };
+
+const toolboxItems: Record<string, ToolboxItem[]> = {
   Text: [
-    { icon: Type, label: 'Bold', syntax: '**bold**', example: 'bold' },
-    { icon: Type, label: 'Bold Italic', syntax: '***bold italic***', example: 'both' },
-    { icon: Type, label: 'Underline', syntax: '<u>text</u>', example: 'underline' },
-    { icon: Type, label: 'Subscript', syntax: '<sub>2</sub>', example: 'H₂O' },
-    { icon: Type, label: 'Superscript', syntax: '<sup>2</sup>', example: 'x²' },
-    { icon: Type, label: 'Strikethrough', syntax: '~~text~~', example: 'strike' },
-    { icon: Type, label: 'Highlight', syntax: '==text==', example: 'highlight' },
-    { icon: Type, label: 'Inline Code', syntax: '`code`', example: 'code' },
+    { icon: Type, label: 'Bold', snippet: '**bold**' },
+    { icon: Type, label: 'Italic', snippet: '*italic*' },
+    { icon: Type, label: 'Bold Italic', snippet: '***bold italic***' },
+    { icon: Type, label: 'Strikethrough', snippet: '~~strike~~' },
+    { icon: Type, label: 'Highlight', snippet: '==highlight==' },
+    { icon: Type, label: 'Underline', snippet: '<u>text</u>' },
+    { icon: Type, label: 'Subscript', snippet: '<sub>2</sub>' },
+    { icon: Type, label: 'Superscript', snippet: '<sup>2</sup>' },
+    { icon: Code, label: 'Inline Code', snippet: '`code`' },
   ],
   Headings: [
-    { icon: Hash, label: 'H1', syntax: '# ', example: 'Heading 1' },
-    { icon: Hash, label: 'H2', syntax: '## ', example: 'Heading 2' },
-    { icon: Hash, label: 'H3', syntax: '### ', example: 'Heading 3' },
-    { icon: Hash, label: 'H4', syntax: '#### ', example: 'Heading 4' },
-    { icon: Hash, label: 'H5', syntax: '##### ', example: 'Heading 5' },
-    { icon: Hash, label: 'H6', syntax: '###### ', example: 'Heading 6' },
+    { icon: Hash, label: 'H1', snippet: '# Heading 1' },
+    { icon: Hash, label: 'H2', snippet: '## Heading 2' },
+    { icon: Hash, label: 'H3', snippet: '### Heading 3' },
+    { icon: Hash, label: 'H4', snippet: '#### Heading 4' },
+    { icon: Hash, label: 'H5', snippet: '##### Heading 5' },
+    { icon: Hash, label: 'H6', snippet: '###### Heading 6' },
   ],
   Lists: [
-    { icon: List, label: 'Bullet', syntax: '- ', example: 'Item' },
-    { icon: List, label: 'Numbered', syntax: '1. ', example: 'Item' },
-    { icon: List, label: 'Task', syntax: '- [ ] ', example: 'Task' },
-    { icon: List, label: 'Task Done', syntax: '- [x] ', example: 'Done' },
+    { icon: List, label: 'Bullet', snippet: '- Item' },
+    { icon: List, label: 'Numbered', snippet: '1. Item' },
+    { icon: List, label: 'Task', snippet: '- [ ] Task item' },
+    { icon: List, label: 'Task Done', snippet: '- [x] Done item' },
+  ],
+  Links: [
+    { icon: LinkIcon, label: 'Link', snippet: '[text](url)' },
+    { icon: Image, label: 'Image', snippet: '![alt](url)' },
+    { icon: FileCode, label: 'Video', snippet: '<video src="url" controls></video>' },
+    { icon: FileCode, label: 'Audio', snippet: '<audio src="url" controls></audio>' },
+    { icon: LinkIcon, label: 'Reference Link', snippet: '[text][ref]\n\n[ref]: url' },
   ],
   Code: [
-    { icon: Code, label: 'JavaScript', syntax: '```javascript\n', example: '\n```' },
-    { icon: Code, label: 'TypeScript', syntax: '```typescript\n', example: '\n```' },
-    { icon: Code, label: 'Python', syntax: '```python\n', example: '\n```' },
-    { icon: Code, label: 'HTML', syntax: '```html\n', example: '\n```' },
-    { icon: Code, label: 'CSS', syntax: '```css\n', example: '\n```' },
-    { icon: Code, label: 'JSON', syntax: '```json\n', example: '\n```' },
-    { icon: Code, label: 'Markdown', syntax: '```markdown\n', example: '\n```' },
-    { icon: Code, label: 'Bash', syntax: '```bash\n', example: '\n```' },
+    { icon: Code, label: 'Inline', snippet: '`code`' },
+    { icon: Code, label: 'JavaScript', snippet: '```javascript\n// code here\n```' },
+    { icon: Code, label: 'TypeScript', snippet: '```typescript\n// code here\n```' },
+    { icon: Code, label: 'Python', snippet: '```python\n# code here\n```' },
+    { icon: Code, label: 'HTML', snippet: '```html\n<!-- code here -->\n```' },
+    { icon: Code, label: 'CSS', snippet: '```css\n/* code here */\n```' },
+    { icon: Code, label: 'JSON', snippet: '```json\n{}\n```' },
+    { icon: Code, label: 'Markdown', snippet: '```markdown\n# heading\n```' },
+    { icon: Code, label: 'Bash', snippet: '```bash\n# command\n```' },
   ],
-  Media: [
-    { icon: Image, label: 'Image', syntax: '![alt](url)', example: 'Image' },
-    { icon: Link, label: 'Link', syntax: '[text](url)', example: 'Link' },
-    { icon: Minus, label: 'Divider', syntax: '---', example: '' },
-    { icon: Table, label: 'Table', syntax: `| Header 1 | Header 2 |
-| -------- | -------- |
-| Cell 1   | Cell 2   |`, example: '' },
+  Tables: [
+    {
+      icon: Table,
+      label: 'Basic Table',
+      snippet:
+        '| Header 1 | Header 2 | Header 3 |\n|----------|:--------:|---------:|\n| Left     | Center   | Right    |\n| Cell 1   | Cell 2   | Cell 3   |',
+    },
+  ],
+  Advanced: [
+    { icon: Quote, label: 'Blockquote', snippet: '> quote' },
+    { icon: Minus, label: 'Horizontal Rule', snippet: '---' },
+    { icon: Type, label: 'Footnote', snippet: 'Text[^1]\n\n[^1]: Footnote content' },
+    {
+      icon: ChevronRight,
+      label: 'Collapsible',
+      snippet: '<details>\n<summary>Title</summary>\n\nContent...\n\n</details>',
+    },
+    { icon: MessageSquare, label: 'Comment', snippet: '<!-- comment -->' },
+    { icon: Code, label: 'Escape *', snippet: '\\*escape\\*' },
+    { icon: Zap, label: 'Inline Math', snippet: '$x=y^2$' },
+    { icon: Zap, label: 'Math Block', snippet: '$$\nE=mc^2\n$$' },
+  ],
+  Extended: [
+    { icon: Smile, label: 'Emoji', snippet: ':smile:' },
+    { icon: User, label: 'Mention', snippet: '@username' },
+    { icon: GitPullRequest, label: 'Issue/PR', snippet: '#123' },
+    { icon: AlertCircle, label: 'Alert: Note', snippet: '> **Note**\n> This is a note' },
+    { icon: AlertCircle, label: 'Alert: Warning', snippet: '> **Warning**\n> This is a warning' },
+    { icon: AlertCircle, label: 'Alert: Important', snippet: '> **Important**\n> This is important' },
   ],
   Variables: [
-    { icon: Calendar, label: 'Current Date', syntax: '{{current_date}}', example: '' },
-    { icon: User, label: 'Current User', syntax: '{{current_user}}', example: '' },
-    { icon: Clock, label: 'ISO DateTime', syntax: '{{iso_datetime}}', example: '' },
-    { icon: Clock, label: 'Date & Time', syntax: '{{current_datetime}}', example: '' },
+    { icon: Calendar, label: 'Current Date', snippet: '{{current_date}}' },
+    { icon: User, label: 'Current User', snippet: '{{current_user}}' },
+    { icon: Clock, label: 'UTC ISO Datetime', snippet: '{{iso_datetime}}' },
+    { icon: Clock, label: 'Current Date & Time', snippet: '{{current_datetime}}' },
   ],
 };
 
@@ -67,21 +121,19 @@ export function MarkdownDrawer({ onInsert }: MarkdownDrawerProps) {
 
   if (!markdownDrawer) return null;
 
-  const filteredItems = searchTerm
-    ? Object.entries(toolboxItems).reduce((acc, [category, items]) => {
-        const filtered = items.filter(item =>
+  const filtered = searchTerm
+    ? (Object.entries(toolboxItems).reduce((acc, [category, items]) => {
+        const f = items.filter((item) =>
           item.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          item.syntax.toLowerCase().includes(searchTerm.toLowerCase())
+          item.snippet.toLowerCase().includes(searchTerm.toLowerCase()),
         );
-        if (filtered.length > 0) {
-          acc[category as keyof typeof toolboxItems] = filtered;
-        }
+        if (f.length) acc[category] = f;
         return acc;
-      }, {} as typeof toolboxItems)
-    : { [activeTab]: toolboxItems[activeTab] };
+      }, {} as Record<string, ToolboxItem[]>) as typeof toolboxItems)
+    : ({ [activeTab]: toolboxItems[activeTab] } as typeof toolboxItems);
 
   return (
-    <div 
+    <div
       className="fixed right-0 top-0 h-full bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 z-50 flex flex-col"
       data-drawer-width={markdownDrawer.width}
     >
@@ -104,7 +156,7 @@ export function MarkdownDrawer({ onInsert }: MarkdownDrawerProps) {
           {Object.keys(toolboxItems).map((tab) => (
             <Button
               key={tab}
-              variant={activeTab === tab ? 'default' : 'ghost'}
+              variant={activeTab === (tab as any) ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setActiveTab(tab as keyof typeof toolboxItems)}
               className="text-xs whitespace-nowrap"
@@ -116,7 +168,7 @@ export function MarkdownDrawer({ onInsert }: MarkdownDrawerProps) {
       )}
 
       <div className="flex-1 overflow-y-auto p-2">
-        {Object.entries(filteredItems).map(([category, items]) => (
+        {Object.entries(filtered).map(([category, items]) => (
           <div key={category}>
             {searchTerm && (
               <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 mt-2">
@@ -127,14 +179,11 @@ export function MarkdownDrawer({ onInsert }: MarkdownDrawerProps) {
               {items.map((item, idx) => (
                 <button
                   key={idx}
-                  onClick={() => onInsert(item.syntax)}
+                  onClick={() => onInsert(item.snippet)}
                   className="flex items-center gap-1 p-1.5 text-xs bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded border border-gray-200 dark:border-gray-700 transition-colors"
                 >
                   <item.icon className="h-3 w-3" />
                   <span className="flex-1 text-left">{item.label}</span>
-                  {item.example && (
-                    <span className="text-[10px] text-gray-400">{item.example}</span>
-                  )}
                 </button>
               ))}
             </div>
