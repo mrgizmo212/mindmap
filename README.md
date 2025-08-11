@@ -4,13 +4,21 @@ The Workflow Editor is a Next.js-based application designed to help you quickly 
 
 ## Table of Contents
 
+- [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
 - [Tech Stack](#tech-stack)
 - [Features](#features)
 - [What's Inside](#whats-inside)
+- [Database Management](#database-management)
 - [Usage](#usage)
 - [Working with Custom Nodes](#working-with-custom-nodes)
 - [Contact Us](#contact-us)
+
+## Prerequisites
+
+- Node.js 18+ and npm
+- Docker Desktop (for database)
+- Git
 
 ## Getting Started
 
@@ -28,7 +36,21 @@ To get started, follow these steps:
    bun install
    ```
 
-2. **Run the development server**:
+2. **Start the database** (requires Docker):
+
+   ```bash
+   docker-compose up -d
+   ```
+
+   This starts a PostgreSQL database for persisting your workflows.
+
+3. **Set up the database schema**:
+
+   ```bash
+   npx prisma migrate dev
+   ```
+
+4. **Run the development server**:
 
    ```bash
    npm run dev
@@ -40,7 +62,7 @@ To get started, follow these steps:
    bun dev
    ```
 
-3. Open your browser and navigate to `http://localhost:3000`.
+5. Open your browser and navigate to `http://localhost:3000`.
 
 ## Tech Stack
 
@@ -50,6 +72,10 @@ To get started, follow these steps:
 
 - **State Management with Zustand**: The application uses Zustand for state management, providing a simple and efficient way to manage the state of nodes, edges, and other workflow-related data.
 
+- **Database with PostgreSQL & Prisma**: Workflows are persisted using PostgreSQL database with Prisma ORM, allowing you to save, load, and manage multiple workflow configurations.
+
+- **Docker**: Used for running the PostgreSQL database locally in a containerized environment.
+
 ## Features
 
 - **Automatic Layouting**: Utilizes the [ELKjs](https://github.com/kieler/elkjs) layout engine to automatically arrange nodes and edges.
@@ -57,6 +83,8 @@ To get started, follow these steps:
 - **Customizable Components**: Uses React Flow Components and the shadcn library to create highly-customizable nodes and edges.
 - **Dark Mode**: Toggles between light and dark themes, managed through the Zustand store.
 - **Runner Functionality**: Executes and monitors nodes sequentially with a workflow runner.
+- **Workflow Persistence**: Save and load workflows to/from PostgreSQL database with unique names and descriptions.
+- **Flow Management Modal**: Built-in modal interface to browse, load, and delete saved workflows without leaving the editor.
 
 ## What's Inside?
 
@@ -81,6 +109,12 @@ Here’s a comprehensive overview of the src folder structure and its contents:
 
 - **`app/workflow/mock-data.ts`**: defines the initial nodes and edges for the workflow. You can modify this file to preload your workflow with custom nodes and connections.
 
+- **`prisma/schema.prisma`**: Defines the database schema for persisting workflows. The Flow model stores workflow names, descriptions, nodes, and edges as JSON.
+
+- **`lib/db.ts`**: Prisma client singleton for database operations.
+
+- **`app/api/flows`**: API routes for CRUD operations on workflows (GET, POST, PUT, DELETE).
+
 ## Adding new React Flow UI components
 
 Find a component you like and run the command to add it to your project.
@@ -94,6 +128,59 @@ npx shadcn@latest add https://ui.reactflow.dev/component-name
 - It utilizes previously added and even modified components or asks you if you’d like to overwrite them.
 - It uses your existing Tailwind configuration.
 - The components are not black-boxes and can be modified and extended to fit your needs.
+
+## Database Management
+
+### Workflow Persistence
+
+The application uses PostgreSQL with Prisma ORM to persist workflows. Each workflow is stored with:
+
+- **Unique name**: Each workflow must have a unique name (enforced at database level)
+- **Description**: Optional description for the workflow
+- **Nodes & Edges**: Complete flow data stored as JSON
+- **Timestamps**: Automatic creation and update timestamps
+
+### Working with Saved Flows
+
+1. **Save a Flow**: Click the Save button in the toolbar. Enter a unique name and optional description.
+
+2. **View Saved Flows**: Click the list icon in the toolbar to open the flows modal.
+
+3. **Load a Flow**: Click on any flow in the modal to load it into the editor.
+
+4. **Delete a Flow**: Use the delete button next to each flow in the modal.
+
+### Database Commands
+
+```bash
+# Start the database
+docker-compose up -d
+
+# Stop the database
+docker-compose down
+
+# View database logs
+docker logs mindmap-postgres
+
+# Reset the database
+docker-compose down -v
+docker-compose up -d
+npx prisma migrate dev
+
+# Update database schema
+npx prisma migrate dev
+
+# View data with Prisma Studio
+npx prisma studio
+```
+
+### API Endpoints
+
+- `GET /api/flows` - List all saved workflows
+- `POST /api/flows` - Create a new workflow
+- `GET /api/flows/:id` - Get a specific workflow
+- `PUT /api/flows/:id` - Update a workflow
+- `DELETE /api/flows/:id` - Delete a workflow
 
 # How are some of these features implemented?
 

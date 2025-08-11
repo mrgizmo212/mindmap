@@ -453,11 +453,9 @@ export function MarkdownNode({ id, data }: WorkflowNodeProps) {
 
   // Capture-phase handlers to block React Flow/global listeners (spacebar pan/scroll)
   const handleKeyDownCapture = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Stop the event so React Flow doesn't treat Space as a pan toggle,
+    // but allow the default behavior so the space character is inserted.
     e.stopPropagation();
-    // Prevent page scroll / RF pan on space when typing
-    if (!e.ctrlKey && !e.metaKey && e.key === ' ') {
-      e.preventDefault();
-    }
   }, []);
 
   const handleKeyUpCapture = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
