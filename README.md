@@ -17,8 +17,10 @@ The Workflow Editor is a Next.js-based application designed to help you quickly 
 ## Prerequisites
 
 - Node.js 18+ and npm
-- Docker Desktop (for database)
 - Git
+- Either:
+  - Docker Desktop (for local database), OR
+  - Supabase account (for remote database - free tier available)
 
 ## Getting Started
 
@@ -36,18 +38,32 @@ To get started, follow these steps:
    bun install
    ```
 
-2. **Start the database** (requires Docker):
+2. **Set up the database** (choose one option):
 
+   ### Option A: Local Database with Docker
+   
    ```bash
    docker-compose up -d
    ```
 
-   This starts a PostgreSQL database for persisting your workflows.
+   ### Option B: Remote Database with Supabase
+   
+   1. Create a free account at [supabase.com](https://supabase.com)
+   2. Create a new project
+   3. Go to Settings → Database
+   4. Copy your connection string (URI)
+   5. Update your `.env` file:
+   
+   ```env
+   DATABASE_URL="your-supabase-connection-string"
+   ```
 
 3. **Set up the database schema**:
 
    ```bash
-   npx prisma migrate dev
+   npx prisma migrate dev  # for local development
+   # or
+   npx prisma db push      # for Supabase (recommended for remote)
    ```
 
 4. **Run the development server**:
@@ -131,6 +147,18 @@ npx shadcn@latest add https://ui.reactflow.dev/component-name
 
 ## Database Management
 
+### Database Options
+
+You can choose between two database options:
+
+1. **Local PostgreSQL with Docker** - Perfect for development and offline work
+2. **Supabase (Remote PostgreSQL)** - Great for:
+   - No Docker required
+   - Access your flows from anywhere
+   - Collaboration features
+   - Free tier includes 500MB database
+   - Built-in backup and security
+
 ### Workflow Persistence
 
 The application uses PostgreSQL with Prisma ORM to persist workflows. Each workflow is stored with:
@@ -152,6 +180,8 @@ The application uses PostgreSQL with Prisma ORM to persist workflows. Each workf
 
 ### Database Commands
 
+#### For Local Docker Database:
+
 ```bash
 # Start the database
 docker-compose up -d
@@ -169,9 +199,29 @@ npx prisma migrate dev
 
 # Update database schema
 npx prisma migrate dev
+```
 
-# View data with Prisma Studio
+#### For Supabase Remote Database:
+
+```bash
+# Push schema changes
+npx prisma db push
+
+# Pull remote schema
+npx prisma db pull
+
+# Reset database (careful!)
+npx prisma migrate reset
+```
+
+#### For Both:
+
+```bash
+# View and edit data with Prisma Studio
 npx prisma studio
+
+# Generate Prisma client after schema changes
+npx prisma generate
 ```
 
 ### API Endpoints
